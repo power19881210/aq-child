@@ -55,6 +55,7 @@
   .big { font-size:26px; font-weight:700; }
   /* PDF pages */
   #render { position:fixed; left:-10000px; top:0; width:794px; }
+  #render.pdftext, #render.pdftext * { font-family:"tcpdf" !important; }
   .page { background:#fff; width:794px; height:1123px; padding:52px 64px 0; position:relative; font-family:"Noto Serif TC",serif; color:#111; }
   .page .stu { position:absolute !important; top:22px; right:40px; margin:0 !important; text-align:left !important; }
   .page .pfoot { position:absolute; left:64px; right:64px; bottom:34px; margin:0; }
@@ -140,6 +141,7 @@ const SUBS = [
   ["溝通", [7,17,18,26,27,31,33,35,38,39]],
   ["想像力", [3,8,14,20,21,24,40,41,42,50]]
 ];
+const FONT_BASE = "fonts/";
 const CUTOFF = 76;
 const ans = new Array(50).fill(null); // 0 完全同意,1 稍微同意,2 稍微不同意,3 完全不同意
 let rel = null;
@@ -246,13 +248,15 @@ function buildScorePage() {
     <div class="foot">計分方式：每題 0–3 分，愈偏向自閉特質的答案分數愈高（第 ${[1,3,8,10,11,14,15,17,24,25,27,28,29,30,31,32,34,36,37,38,40,44,47,48,49,50].join("、")} 題為反向計分），總分 0–150。切截點依 Auyeung, Baron-Cohen, Wheelwright & Allison (2008), J Autism Dev Disord 38(7):1230–40，總分 ≥ 76。適用 4–11 歲兒童，由家長填寫。<br>本量表為篩檢工具，結果達切截點代表建議由兒童心智科／身心科醫師進一步評估，不等於診斷。量表來源：Autism Research Centre, University of Cambridge。</div>`;
   return d;
 }
+function fillGap(el) { // 把剩餘空間平均分給每題，塞滿頁面
+  if (!el.classList.contains("page")) return;
+  const t = el.querySelector("table.q"), f = el.querySelector(".pfoot"), rows = t.querySelectorAll("tbody tr");
+  const gap = f.offsetTop - (t.offsetTop + t.offsetHeight) - 22;
+  if (gap > 0 && rows.length) { const add = Math.min(gap / rows.length / 2, 14); rows.forEach(tr => tr.querySelectorAll("td").forEach(td => { td.style.paddingTop = td.style.paddingBottom = (3 + add) + "px"; })); }
+}
 async function snap(el) {
   const holder = document.getElementById("render"); holder.innerHTML = ""; holder.appendChild(el);
-  if (el.classList.contains("page")) { // 把剩餘空間平均分給每題，塞滿頁面
-    const t = el.querySelector("table.q"), f = el.querySelector(".pfoot"), rows = t.querySelectorAll("tbody tr");
-    const gap = f.offsetTop - (t.offsetTop + t.offsetHeight) - 22;
-    if (gap > 0 && rows.length) { const add = Math.min(gap / rows.length / 2, 14); rows.forEach(tr => tr.querySelectorAll("td").forEach(td => { td.style.paddingTop = td.style.paddingBottom = (3 + add) + "px"; })); }
-  }
+  fillGap(el);
   const c = await html2canvas(el, { scale: 2, backgroundColor: "#ffffff", useCORS: true, windowWidth: 794 });
   holder.innerHTML = ""; return c;
 }
@@ -279,7 +283,98 @@ function splitPages() { // 50 題排成兩頁：第 1 頁放滿，其餘放第 2
   holder.innerHTML = "";
   return [p1, p2];
 }
-async function makePdf() {
+// ---- 文字版 PDF：載入內建中文字型（Noto Serif TC 子集，SIL OFL）----
+let FONT = null;
+function toB64(buf) { const u = new Uint8Array(buf); let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); }
+async function loadFont() {
+  if (FONT) return FONT;
+  const get = async n => { const r = await fetch(FONT_BASE + n); if (!r.ok) throw new Error("font " + r.status); return r.arrayBuffer(); };
+  const [r, b] = await Promise.all([get("TC-Regular.ttf"), get("TC-Bold.ttf")]);
+  const f1 = new FontFace("tcpdf", r.slice(0), { weight: "400" }), f2 = new FontFace("tcpdf", b.slice(0), { weight: "700" });
+  await Promise.all([f1.load(), f2.load()]); document.fonts.add(f1); document.fonts.add(f2);
+  FONT = { r: toB64(r), b: toB64(b) };
+  return FONT;
+}
+// 把排好版的 DOM 頁面逐一畫進 PDF（文字為真正的文字，線條為向量）
+function drawDom(pdf, root) {
+  const S = 210 / root.getBoundingClientRect().width, o = root.getBoundingClientRect();
+  const X = v => (v - o.left) * S, Y = v => (v - o.top) * S;
+  const col = c => { const m = c.match(/[\d.]+/g); return m ? { r: +m[0], g: +m[1], b: +m[2], a: m[3] === undefined ? 1 : +m[3] } : null; };
+  const els = [root, ...root.querySelectorAll("*")];
+  // 1) 背景與框線
+  for (const e of els) {
+    const cs = getComputedStyle(e); if (cs.display === "none" || cs.visibility === "hidden") continue;
+    const r = e.getBoundingClientRect(); if (!r.width || !r.height) continue;
+    const round = parseFloat(cs.borderTopLeftRadius) >= Math.min(r.width, r.height) / 2 - 1;
+    const bg = col(cs.backgroundColor);
+    if (bg && bg.a > 0 && !(bg.r > 250 && bg.g > 250 && bg.b > 250)) {
+      pdf.setFillColor(bg.r, bg.g, bg.b);
+      if (round) pdf.ellipse(X(r.left + r.width / 2), Y(r.top + r.height / 2), r.width * S / 2, r.height * S / 2, "F");
+      else pdf.rect(X(r.left), Y(r.top), r.width * S, r.height * S, "F");
+    }
+    const sides = [["Top", r.left, r.top, r.right, r.top], ["Right", r.right, r.top, r.right, r.bottom], ["Bottom", r.left, r.bottom, r.right, r.bottom], ["Left", r.left, r.top, r.left, r.bottom]];
+    if (round) {
+      const w = parseFloat(cs.borderTopWidth), c = col(cs.borderTopColor);
+      if (w > 0 && cs.borderTopStyle !== "none" && c && c.a > 0) { pdf.setDrawColor(c.r, c.g, c.b); pdf.setLineWidth(w * S); pdf.ellipse(X(r.left + r.width / 2), Y(r.top + r.height / 2), (r.width - w) * S / 2, (r.height - w) * S / 2, "S"); }
+    } else for (const [sd, x1, y1, x2, y2] of sides) {
+      const w = parseFloat(cs["border" + sd + "Width"]), st = cs["border" + sd + "Style"], c = col(cs["border" + sd + "Color"]);
+      if (!(w > 0) || st === "none" || st === "hidden" || !c || c.a === 0) continue;
+      pdf.setDrawColor(c.r, c.g, c.b); pdf.setLineWidth(w * S);
+      if (st === "dashed") pdf.setLineDashPattern([w * 3 * S, w * 2 * S], 0);
+      const dx = sd === "Left" ? w / 2 : sd === "Right" ? -w / 2 : 0, dy = sd === "Top" ? w / 2 : sd === "Bottom" ? -w / 2 : 0;
+      pdf.line(X(x1 + dx), Y(y1 + dy), X(x2 + dx), Y(y2 + dy));
+      if (st === "dashed") pdf.setLineDashPattern([], 0);
+    }
+    if (e.matches("td.c.on .box")) { pdf.setFillColor(17, 17, 17); pdf.rect(X(r.left + 4), Y(r.top + 4), (r.width - 8) * S, (r.height - 8) * S, "F"); }
+    if (cs.textDecorationLine && cs.textDecorationLine.includes("underline")) {
+      const c = col(cs.color); pdf.setDrawColor(c.r, c.g, c.b); pdf.setLineWidth(0.6 * S);
+      for (const rr of e.getClientRects()) pdf.line(X(rr.left), Y(rr.bottom - 1.5), X(rr.right), Y(rr.bottom - 1.5));
+    }
+  }
+  // 2) 文字：逐字取位置，同一行連續的字合併成一段輸出
+  const ASC = 1151 / (1151 + 286);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const range = document.createRange();
+  let n;
+  while ((n = walker.nextNode())) {
+    const t = n.nodeValue; if (!t.trim()) continue;
+    const cs = getComputedStyle(n.parentElement); if (cs.display === "none" || cs.visibility === "hidden") continue;
+    const fs = parseFloat(cs.fontSize), bold = parseInt(cs.fontWeight) >= 600, c = col(cs.color);
+    pdf.setFont("tcpdf", bold ? "bold" : "normal"); pdf.setFontSize(fs * S / 0.3528); pdf.setTextColor(c.r, c.g, c.b);
+    let run = "", rx = 0, rtop = null, rh = 0, lastRight = null;
+    const flush = () => { if (run.trim()) pdf.text(run, X(rx), Y(rtop + rh * ASC), { baseline: "alphabetic" }); run = ""; rtop = null; };
+    for (let i = 0; i < t.length; i++) {
+      range.setStart(n, i); range.setEnd(n, i + 1);
+      const rs = range.getClientRects(); if (!rs.length) continue;
+      const rr = rs[0]; if (!rr.width && t[i] !== " ") continue;
+      if (rtop === null || Math.abs(rr.top - rtop) > 1 || Math.abs(rr.left - lastRight) > 1.5) { flush(); rx = rr.left; rtop = rr.top; rh = rr.height; }
+      run += t[i]; lastRight = rr.right;
+    }
+    flush();
+  }
+}
+async function makePdfText() {
+  setStatus("載入字型中…（第一次約需數秒）");
+  const font = await loadFont();
+  setStatus("產生 PDF 中…");
+  const { jsPDF } = window.jspdf; const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+  pdf.addFileToVFS("TC-Regular.ttf", font.r); pdf.addFont("TC-Regular.ttf", "tcpdf", "normal");
+  pdf.addFileToVFS("TC-Bold.ttf", font.b); pdf.addFont("TC-Bold.ttf", "tcpdf", "bold");
+  pdf.setFont("tcpdf", "normal");
+  const holder = document.getElementById("render");
+  holder.classList.add("pdftext");
+  try {
+    const pages = splitPages();
+    if (document.getElementById("withScore").checked) pages.push(buildScorePage());
+    pages.forEach((pg, k) => {
+      holder.innerHTML = ""; holder.appendChild(pg); fillGap(pg);
+      if (k > 0) pdf.addPage();
+      drawDom(pdf, pg);
+    });
+  } finally { holder.innerHTML = ""; holder.classList.remove("pdftext"); }
+  return pdf;
+}
+async function makePdfImage() {
   await document.fonts.ready;
   const { jsPDF } = window.jspdf; const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
   const [p1, p2] = splitPages();
@@ -287,6 +382,10 @@ async function makePdf() {
   addPage(pdf, await snap(p2), false);
   if (document.getElementById("withScore").checked) addPage(pdf, await snap(buildScorePage()), false);
   return pdf;
+}
+async function makePdf() {
+  try { return await makePdfText(); }
+  catch (e) { console.warn("文字版 PDF 失敗，改用圖片版", e); return await makePdfImage(); }
 }
 document.getElementById("dl").addEventListener("click", async () => {
   const btn = document.getElementById("dl");

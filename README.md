@@ -6,3 +6,5 @@
 點選作答、自動計分，可下載與原紙本相同版面的 PDF（可附計分結果頁）。
 
 量表來源：Autism Research Centre, University of Cambridge，僅供非商業用途。本量表為篩檢工具，不等於診斷。
+
+PDF 為文字版（可選取、搜尋），字型為 Noto Serif TC 子集（`fonts/`，SIL Open Font License）。
