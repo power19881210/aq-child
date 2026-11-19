@@ -59,6 +59,9 @@
   .page .stu { position:absolute !important; top:22px; right:40px; margin:0 !important; text-align:left !important; }
   .page .pfoot { position:absolute; left:64px; right:64px; bottom:34px; margin:0; }
   .page table.q td { padding:6px 4px; }
+  .page.compact table.q { font-size:var(--fs); }
+  .page.compact table.q td { padding:3px 4px; }
+  .page.compact table.q td.c, .page.compact table.q th { width:52px; }
   .page h1 { margin-top:10px; }
   .print-val { display:inline-block; border-bottom:1.5px solid #222; font-weight:700; font-size:17px; line-height:1.3; padding:0 4px; text-align:center; vertical-align:bottom; min-height:1.4em; }
   .scorepage { background:#fff; width:794px; height:1123px; padding:56px 56px; font-family:"Noto Serif TC",serif; color:#111; }
@@ -77,10 +80,10 @@
   .modal button, .modal a { font:inherit; font-size:15px; font-weight:600; border:0; border-radius:10px; padding:10px 22px; cursor:pointer; text-decoration:none; }
   .modal .okb { background:#2b2b2b; color:#fff; } .modal .ext { background:#06c755; color:#fff; }
   @media (max-width:600px) {
-    .sheet { padding:22px 10px 26px; } .stu { position:static; text-align:right; margin:0 0 6px; }
-    h1 { font-size:19px; } .sub { font-size:15px; } .meta { font-size:14px; } .intro { font-size:14px; }
-    table.q { font-size:14px; } table.q th { font-size:12px; width:40px; } table.q td.c { width:40px; } table.q td.no { width:26px; }
-    .w-name { width:140px; }
+    .sheet { padding:22px 10px 26px; } .sheet .stu { position:static; text-align:right; margin:0 0 6px; }
+    .sheet h1 { font-size:19px; } .sheet .sub { font-size:15px; } .sheet .meta { font-size:14px; } .sheet .intro { font-size:14px; }
+    .sheet table.q { font-size:14px; } .sheet table.q th { font-size:12px; width:40px; } .sheet table.q td.c { width:40px; } .sheet table.q td.no { width:26px; }
+    .sheet .w-name { width:140px; }
   }
 </style>
 </head>
@@ -186,7 +189,7 @@ function renderResult() {
     <div>總分：<span class="big">${total}</span> / 50　${res}</div>
     <h3>各向度分數（參考，無個別切截點）</h3>
     <table><tr><th>向度</th><th>分數</th><th>已填</th></tr>${subs.map(([nm, s, f, n]) => `<tr><td>${nm}</td><td><b>${s}</b> / 10</td><td>${f}/${n}</td></tr>`).join("")}</table>
-    <label class="opt"><input type="checkbox" id="withScore" ${checked ? "checked" : ""}> 下載 PDF 時附上計分結果（第 4 頁）</label>
+    <label class="opt"><input type="checkbox" id="withScore" ${checked ? "checked" : ""}> 下載 PDF 時附上計分結果（第 3 頁）</label>
     <div class="hint">計分：每題選「完全同意／少許同意」或「少許不同意／完全不同意」計 1 或 0 分（約一半題目為反向計分），總分 0–50。原作者研究（Baron-Cohen et al., 2006）以總分 ≥ 30 為切截點。適用 12–15 歲，由家長填寫；4–11 歲請改用兒童版（AQ-Child）。本量表僅供篩檢參考，不等於診斷，結果偏高建議轉介兒童心智科／身心科進一步評估。量表來源：Autism Research Centre, University of Cambridge，僅供非商業使用。</div>`;
 }
 renderResult();
@@ -245,6 +248,11 @@ function buildScorePage() {
 }
 async function snap(el) {
   const holder = document.getElementById("render"); holder.innerHTML = ""; holder.appendChild(el);
+  if (el.classList.contains("page")) { // 把剩餘空間平均分給每題，塞滿頁面
+    const t = el.querySelector("table.q"), f = el.querySelector(".pfoot"), rows = t.querySelectorAll("tbody tr");
+    const gap = f.offsetTop - (t.offsetTop + t.offsetHeight) - 22;
+    if (gap > 0 && rows.length) { const add = Math.min(gap / rows.length / 2, 14); rows.forEach(tr => tr.querySelectorAll("td").forEach(td => { td.style.paddingTop = td.style.paddingBottom = (3 + add) + "px"; })); }
+  }
   const c = await html2canvas(el, { scale: 2, backgroundColor: "#ffffff", useCORS: true, windowWidth: 794 });
   holder.innerHTML = ""; return c;
 }
@@ -254,12 +262,29 @@ function addPage(pdf, canvas, first) {
   if (h > ph) { h = ph; w = canvas.width * ph / canvas.height; }
   pdf.addImage(canvas.toDataURL("image/jpeg", 0.92), "JPEG", (pw - w) / 2, 0, w, h);
 }
+function splitPages() { // 50 題排成兩頁：第 1 頁放滿，其餘放第 2 頁；放不下就縮小字級
+  const holder = document.getElementById("render");
+  const lim = p => p.querySelector(".pfoot").offsetTop - 12;
+  const bottom = p => { const t = p.querySelector("table.q"); return t.offsetTop + t.offsetHeight; };
+  let p1, p2;
+  for (let fs = 15.5; fs >= 11; fs -= 0.5) {
+    holder.innerHTML = "";
+    p1 = makePage(0, 50, true); p2 = makePage(50, 50, false);
+    [p1, p2].forEach(p => { p.classList.add("compact"); p.style.setProperty("--fs", fs + "px"); });
+    holder.append(p1, p2);
+    const tb1 = p1.querySelector("tbody"), tb2 = p2.querySelector("tbody");
+    while (bottom(p1) > lim(p1) && tb1.rows.length) tb2.insertBefore(tb1.rows[tb1.rows.length - 1], tb2.firstChild);
+    if (bottom(p2) <= lim(p2)) break;
+  }
+  holder.innerHTML = "";
+  return [p1, p2];
+}
 async function makePdf() {
   await document.fonts.ready;
   const { jsPDF } = window.jspdf; const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-  addPage(pdf, await snap(makePage(0, 13, true)), true);
-  addPage(pdf, await snap(makePage(13, 32, false)), false);
-  addPage(pdf, await snap(makePage(32, 50, false)), false);
+  const [p1, p2] = splitPages();
+  addPage(pdf, await snap(p1), true);
+  addPage(pdf, await snap(p2), false);
   if (document.getElementById("withScore").checked) addPage(pdf, await snap(buildScorePage()), false);
   return pdf;
 }
