@@ -316,7 +316,11 @@ function drawDom(pdf, root) {
     const sides = [["Top", r.left, r.top, r.right, r.top], ["Right", r.right, r.top, r.right, r.bottom], ["Bottom", r.left, r.bottom, r.right, r.bottom], ["Left", r.left, r.top, r.left, r.bottom]];
     if (round) {
       const w = parseFloat(cs.borderTopWidth), c = col(cs.borderTopColor);
-      if (w > 0 && cs.borderTopStyle !== "none" && c && c.a > 0) { pdf.setDrawColor(c.r, c.g, c.b); pdf.setLineWidth(w * S); pdf.ellipse(X(r.left + r.width / 2), Y(r.top + r.height / 2), (r.width - w) * S / 2, (r.height - w) * S / 2, "S"); }
+      if (w > 0 && cs.borderTopStyle !== "none" && c && c.a > 0) {
+        pdf.setDrawColor(c.r, c.g, c.b); pdf.setLineWidth(w * S);
+        if (r.width / r.height < 1.3) pdf.ellipse(X(r.left + r.width / 2), Y(r.top + r.height / 2), (r.width - w) * S / 2, (r.height - w) * S / 2, "S");
+        else { const rad = (r.height - w) * S / 2; pdf.roundedRect(X(r.left + w / 2), Y(r.top + w / 2), (r.width - w) * S, (r.height - w) * S, rad, rad, "S"); } // 長條形外框：畫圓角膠囊，不壓到字
+      }
     } else for (const [sd, x1, y1, x2, y2] of sides) {
       const w = parseFloat(cs["border" + sd + "Width"]), st = cs["border" + sd + "Style"], c = col(cs["border" + sd + "Color"]);
       if (!(w > 0) || st === "none" || st === "hidden" || !c || c.a === 0) continue;
